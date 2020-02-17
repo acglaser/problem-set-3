@@ -1,0 +1,248 @@
+---
+title: "PS_3_ML"
+author: "Audrey Glaser"
+date: "2/13/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tree)
+library(ISLR)
+library(tidyverse)
+library(readr)
+library(gbm)
+library(Metrics)
+library(ipred)
+library(randomForest)
+library(e1071)
+library(rsample)
+```
+
+## R Markdown
+
+Set up the data and store some things for later use:
+• Set seed
+• Load the data
+• Store the total number of features minus the biden feelings in object p
+• Set λ (shrinkage/learning rate) range from 0.0001 to 0.04, by 0.001
+
+```{r}
+set.seed(210)
+nes2008 <- read_csv("Desktop/problem-set-2-master/nes2008.csv")
+p <- 5
+lambda_seq <- seq(from=0.0001,to=0.04,by = 0.001)
+```
+
+Create a training set consisting of 75% of the observations, and a test set with all remaining obs. Note: because you will be asked to loop over multiple λ values below, these training and test sets should only be integer values corresponding with row IDs in the data. This is a little tricky, but think about it carefully. If you try to set the training and testing sets as before, you will be unable to loop below.
+
+```{r}
+train <- sample(1:nrow(nes2008), .75*1807)
+test <- c(1:1807)
+test <- test[-train]
+```
+
+Create empty objects to store training and testing MSE. 
+
+```{r}
+TestMSE <- vector(mode = "numeric", length = length(lambda_seq))
+TrainingMSE <- vector(mode = "numeric", length = length(lambda_seq))
+```
+
+Then write a loop to perform boosting on the training set with 1,000 trees for the pre-defined range of values of the shrinkage parameter, λ. Then, plot the training set and test set MSE across shrinkage values.
+
+```{r}
+
+for(i in seq_along(lambda_seq)){
+  
+  boost.train <- gbm(biden ~.,
+                   data = nes2008[train,],
+                   distribution = "gaussian",
+                   n.trees = 1000,
+                   shrinkage = lambda_seq[i],
+                   interaction.depth = 4
+                   )
+ 
+  training.pred <- predict(boost.train, newdata = nes2008[train,], n.trees=1000)
+  training.mse <- mse(training.pred,nes2008$biden[train])
+
+  # making prediction on the test set
+
+  test.pred <- predict(boost.train, newdata = nes2008[test,], n.trees=1000)
+  test.mse <- mse(test.pred, nes2008$biden[test])
+
+  # extract MSE and lambda values
+
+  TrainingMSE[i] <- training.mse
+  TestMSE[i] <- test.mse
+
+  result <- cbind(lambda_seq, TrainingMSE, TestMSE)
+  result <- result %>%
+    as.tibble()
+}
+
+result %>%
+  ggplot(aes(x = lambda_seq))+
+  geom_point(aes(y = TrainingMSE, color = "Training Set")) +
+  geom_point(aes(y = TestMSE, color = "Test Set")) +
+  geom_line(aes(y = TrainingMSE, color = "Training Set")) +
+  geom_line(aes(y = TestMSE, color = "Test Set"))+
+  labs(x = "Shrinkage Values (Lambda)", y = "MSE values")
+  
+```
+
+The test MSE values are insensitive to some precise value of λ as long as its small enough. Update the boosting procedure by setting λ equal to 0.01 (but still over 1000 trees). Report the test MSE and discuss the results. How do they compare?
+
+```{r}
+boost.train <- gbm(biden ~.,
+                   data = nes2008[train,],
+                   distribution = "gaussian",
+                   n.trees = 1000,
+                   shrinkage = 0.01,
+                   interaction.depth = 4
+                   )
+
+test.pred <- predict(boost.train, newdata = nes2008[test,], n.trees=1000)
+test.mse <- mse(test.pred, nes2008$biden[test])
+
+
+result %>%
+  ggplot(aes(x = lambda_seq))+
+  geom_point(aes(y = TrainingMSE, color = "Training Set")) +
+  geom_point(aes(y = TestMSE, color = "Test Set")) +
+  geom_line(aes(y = TrainingMSE, color = "Training Set")) +
+  geom_line(aes(y = TestMSE, color = "Test Set"))+
+  geom_vline(xintercept=0.01, linetype="dashed")+
+  labs(x = "Shrinkage Values (Lambda)", y = "MSE values")
+
+```
+
+The test MSE when λ is set to 0.01 is equal to approx. 393.5. Looking at our plot above, we see that test MSE stays roughly constant as λ is increased. However, smaller λ values than 0.01 result in models with much larger test MSEs. The implication is that the model test MSE is insensitive to shrinkage values once they are larger than 0.01. 
+
+Now apply bagging to the training set. What is the test set MSE for this approach?
+
+```{r, include=FALSE}
+bag <- randomForest(biden ~.,
+                   data = nes2008,
+                   subset = train, 
+                   mtry = p)
+bag.test.pred <- predict(bag, newdata = nes2008[test,])
+bag.test.mse <- mse(bag.test.pred, nes2008$biden[test])
+bag.test.mse
+```
+
+Now apply random forest to the training set. What is the test set MSE for this approach?
+
+```{r, include=FALSE}
+rf <- randomForest(biden ~.,
+                   data = nes2008,
+                   subset = train)
+
+rf.test.pred <- predict(rf, newdata = nes2008[test,])
+rf.test.mse <- mse(rf.test.pred, nes2008$biden[test])
+rf.test.mse
+```
+
+Now apply linear regression to the training set. What is the test set MSE for this approach?
+
+```{r, include=FALSE}
+lm <- glm(biden ~.,data = nes2008, subset = train)
+lm.test.pred <- predict(lm, newdata = nes2008[test,])
+lm.test.mse <- mse(lm.test.pred, nes2008$biden[test])
+lm.test.mse
+```
+
+Applying boosting (with a lambda parameter of at least 0.01) and random forest approaches to the training set both result in roughly equal test MSEs around 395. Linear regression results in the lowest MSE of all (383.18), suggesting it is the most appropriate model for this data, out of the options available. The bagging approach results in a test MSE that is much larger than the other three approaches. 
+
+## Support vector machine
+
+Create a training set with a random sample of size 800, and a test set containing the remaining observations.
+
+```{r}
+set.seed(234)
+
+OJ$Purchase <- factor(OJ$Purchase)
+
+OJ_split <- initial_split(OJ, prop=0.747663)
+train <- training(OJ_split)
+test <- testing(OJ_split)
+```
+
+Fit a support vector classifier to the training data with cost = 0.01, with Purchase as the response and all other features as predictors. Discuss the results.
+
+```{r}
+#Fit classifier
+svmfit <- svm(Purchase ~ ., 
+             data = train, 
+             kernel = "linear", 
+             cost = 0.01, 
+             scale = FALSE)
+
+summary(svmfit)
+```
+
+The results of fitting a support vector machine classifier with a 0.01 cost parameter value and linear kernel function tells us the following: when these observations are enlarged into a higher dimensional space, the model requires 628 support vectors to determine a decision boundary. Of these support vectors, 315 belong to our first output class (CH) and 313 belong to the other (MM).
+
+Display the confusion matrix for the classification solution, and also report both the training and test set error rates.
+
+```{r}
+#Generate predicted values for train and test sets
+Purchase_1 <- predict(svmfit, train)
+Purchase_2 <- predict(svmfit, test)
+
+#Confusion matrix for training set predictions
+table(predicted = Purchase_1, 
+      true = train$Purchase)
+
+#Error rate, calculated as misclassified/total
+(131+59)/800
+
+#Confusion matrix for test set predictions
+table(predicted = Purchase_2, 
+      true = test$Purchase)
+
+#Error rate, calculated as misclassified/total
+(35+10)/270
+```
+
+Find an optimal cost in the range of 0.01 to 1000 (specific range values can vary; there is no set vector of range values you must use).
+
+```{r}
+#Use tuning function to test range of cost values
+tune_c <- tune(svm, 
+                Purchase ~ ., 
+                data = train, 
+                kernel = "linear", 
+                ranges = list(cost = c(0.01, 0.1, 1, 10, 100, 1000)))
+
+#Subset best model and look at summary to identify its cost value
+tuned_model <- tune_c$best.model
+summary(tuned_model)
+```
+
+The optimal cost value (as reported by the best model from the tuning procedure) is 1.
+
+Compute the optimal training and test error rates using this new value for cost. 
+
+```{r}
+#Generate predicted values for train and test sets
+Purchase_3 <- predict(tuned_model, train)
+Purchase_4 <- predict(tuned_model, test)
+
+#Confusion matrix for training set predictions
+t1 <- table(predicted = Purchase_3, 
+      true = train$Purchase)
+
+#Error rate, calculated as misclassified / total
+(t1[1,2]+t1[2,1])/800
+
+#Confusion matrix for test set predictions
+t2 <- table(predicted = Purchase_4, 
+      true = test$Purchase)
+
+#Error rate, calculated as misclassified / total
+(t2[1,2]+t2[2,1])/270
+```
+
+Both training and test error rates are lower for the tuned model than for the original model. This makes sense, given that the purpose of the tuning function was to determine the cost value which results in the most accurate classifier. The tuned model correctly classifies over 85% of test observations, which means it's a fairly successful classifier. Interestingly, for the tuned model, we observe lower test error rates than the training error rates, suggesting low variance.
